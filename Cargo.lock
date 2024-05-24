@@ -2700,6 +2700,7 @@ dependencies = [
  "derive_more",
  "ed25519-dalek",
  "futures-lite 2.3.0",
+ "futures-util",
  "genawaiter",
  "indexmap 2.2.6",
  "iroh-base",
