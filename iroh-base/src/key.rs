@@ -10,13 +10,17 @@ use std::{
     time::Duration,
 };
 
+use ed25519_dalek::{
+    pkcs8::{EncodePrivateKey, EncodePublicKey},
+    SignatureError, SigningKey, VerifyingKey,
+};
 pub use ed25519_dalek::{Signature, PUBLIC_KEY_LENGTH};
-use ed25519_dalek::{SignatureError, SigningKey, VerifyingKey};
 use once_cell::sync::OnceCell;
 use rand_core::CryptoRngCore;
 use serde::{Deserialize, Serialize};
 use ssh_key::LineEnding;
 use ttl_cache::TtlCache;
+use zeroize::Zeroizing;
 
 pub use self::encryption::SharedSecret;
 use self::encryption::{public_ed_box, secret_ed_box};
@@ -144,6 +148,14 @@ impl PublicKey {
     /// Get this public key as a byte array.
     pub fn as_bytes(&self) -> &[u8; 32] {
         &self.0
+    }
+
+    /// Serializes the public key as PEM
+    pub fn serialize_public_pem(&self) -> String {
+        use ed25519_dalek::pkcs8::spki::der::pem::LineEnding;
+        let key = self.public();
+        key.to_public_key_pem(LineEnding::default())
+            .expect("key is valid")
     }
 
     fn public(&self) -> VerifyingKey {
@@ -322,6 +334,14 @@ impl SecretKey {
     /// The public key of this [`SecretKey`].
     pub fn public(&self) -> PublicKey {
         self.secret.verifying_key().into()
+    }
+
+    /// Serializes the secret key as PEM
+    pub fn serialize_secret_pem(&self) -> Zeroizing<String> {
+        use ed25519_dalek::pkcs8::spki::der::pem::LineEnding;
+        self.secret
+            .to_pkcs8_pem(LineEnding::default())
+            .expect("key is valid")
     }
 
     /// Generate a new [`SecretKey`] with the default randomness generator.

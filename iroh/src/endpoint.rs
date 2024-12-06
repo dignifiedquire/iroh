@@ -100,6 +100,7 @@ pub struct Builder {
     insecure_skip_relay_cert_verify: bool,
     addr_v4: Option<SocketAddrV4>,
     addr_v6: Option<SocketAddrV6>,
+    tls_auth: tls::Authentication,
 }
 
 impl Default for Builder {
@@ -118,6 +119,7 @@ impl Default for Builder {
             insecure_skip_relay_cert_verify: false,
             addr_v4: None,
             addr_v6: None,
+            tls_auth: tls::Authentication::X509,
         }
     }
 }
@@ -133,6 +135,7 @@ impl Builder {
         let relay_map = self.relay_mode.relay_map();
         let secret_key = self.secret_key.unwrap_or_else(SecretKey::generate);
         let static_config = StaticConfig {
+            tls_auth: self.tls_auth,
             transport_config: Arc::new(self.transport_config.unwrap_or_default()),
             keylog: self.keylog,
             secret_key: secret_key.clone(),
@@ -306,6 +309,18 @@ impl Builder {
         self
     }
 
+    /// Use libp2p based self signed certificates for TLS.
+    pub fn tls_x509(mut self) -> Self {
+        self.tls_auth = tls::Authentication::X509;
+        self
+    }
+
+    /// Use TLS Raw Public Keys
+    pub fn tls_raw_public_keys(mut self) -> Self {
+        self.tls_auth = tls::Authentication::RawPublicKey;
+        self
+    }
+
     #[cfg(feature = "discovery-pkarr-dht")]
     #[cfg_attr(iroh_docsrs, doc(cfg(feature = "discovery-pkarr-dht")))]
     /// Configures the endpoint to also use the mainline DHT with default settings.
@@ -422,6 +437,7 @@ impl Builder {
 /// Configuration for a [`quinn::Endpoint`] that cannot be changed at runtime.
 #[derive(Debug)]
 struct StaticConfig {
+    tls_auth: tls::Authentication,
     secret_key: SecretKey,
     transport_config: Arc<quinn::TransportConfig>,
     keylog: bool,
@@ -431,6 +447,7 @@ impl StaticConfig {
     /// Create a [`quinn::ServerConfig`] with the specified ALPN protocols.
     fn create_server_config(&self, alpn_protocols: Vec<Vec<u8>>) -> Result<ServerConfig> {
         let server_config = make_server_config(
+            self.tls_auth,
             &self.secret_key,
             alpn_protocols,
             self.transport_config.clone(),
@@ -445,12 +462,13 @@ impl StaticConfig {
 // used by iroh::node::Node (or rather iroh::node::Builder) to create a plain Quinn
 // endpoint.
 pub fn make_server_config(
+    tls_auth: tls::Authentication,
     secret_key: &SecretKey,
     alpn_protocols: Vec<Vec<u8>>,
     transport_config: Arc<TransportConfig>,
     keylog: bool,
 ) -> Result<ServerConfig> {
-    let quic_server_config = tls::make_server_config(secret_key, alpn_protocols, keylog)?;
+    let quic_server_config = tls_auth.make_server_config(secret_key, alpn_protocols, keylog)?;
     let mut server_config = ServerConfig::with_crypto(Arc::new(quic_server_config));
     server_config.transport_config(transport_config);
 
@@ -635,7 +653,7 @@ impl Endpoint {
         debug!("Attempting connection...");
         let client_config = {
             let alpn_protocols = vec![alpn.to_vec()];
-            let quic_client_config = tls::make_client_config(
+            let quic_client_config = tls::Authentication::X509.make_client_config(
                 &self.static_config.secret_key,
                 Some(node_id),
                 alpn_protocols,
