@@ -28,7 +28,7 @@ use std::{
 
 use anyhow::{anyhow, bail, Context as _, Result};
 use hickory_resolver::TokioResolver as DnsResolver;
-use iroh_base::RelayUrl;
+use iroh_base::{IpMappedAddrs, RelayUrl};
 #[cfg(feature = "metrics")]
 use iroh_metrics::inc;
 use iroh_relay::{
@@ -94,6 +94,7 @@ impl Client {
         quic_config: Option<QuicConfig>,
         dns_resolver: DnsResolver,
         protocols: BTreeSet<ProbeProto>,
+        ip_mapped_addrs: Option<IpMappedAddrs>,
     ) -> Self {
         let (msg_tx, msg_rx) = mpsc::channel(32);
         let addr = Addr {
@@ -114,6 +115,7 @@ impl Client {
             outstanding_tasks: OutstandingTasks::default(),
             dns_resolver,
             protocols,
+            ip_mapped_addrs,
         };
         let task = tokio::spawn(
             async move { actor.run().await }.instrument(info_span!("reportgen.actor")),
@@ -200,6 +202,8 @@ struct Actor {
     /// Protocols we should attempt to create probes for, if we have the correct
     /// configuration for that protocol.
     protocols: BTreeSet<ProbeProto>,
+    /// Optional [`IpMappedAddrs`] used to enable QAD in iroh
+    ip_mapped_addrs: Option<IpMappedAddrs>,
 }
 
 impl Actor {
@@ -569,6 +573,7 @@ impl Actor {
                 let net_report = self.net_report.clone();
                 let pinger = pinger.clone();
                 let dns_resolver = self.dns_resolver.clone();
+                let ip_mapped_addrs = self.ip_mapped_addrs.clone();
 
                 set.spawn(
                     run_probe(
@@ -581,6 +586,7 @@ impl Actor {
                         net_report,
                         pinger,
                         dns_resolver,
+                        ip_mapped_addrs,
                     )
                     .instrument(debug_span!("run_probe", %probe)),
                 );
@@ -716,6 +722,7 @@ async fn run_probe(
     net_report: net_report::Addr,
     pinger: Pinger,
     dns_resolver: DnsResolver,
+    ip_mapped_addrs: Option<IpMappedAddrs>,
 ) -> Result<ProbeReport, ProbeError> {
     if !probe.delay().is_zero() {
         trace!("delaying probe");
@@ -749,7 +756,7 @@ async fn run_probe(
         ));
     }
 
-    let relay_addr = get_relay_addr(&dns_resolver, &relay_node, probe.proto())
+    let relay_addr = get_relay_addr(&dns_resolver, &relay_node, probe.proto(), ip_mapped_addrs)
         .await
         .context("no relay node addr")
         .map_err(|e| ProbeError::AbortSet(e, probe.clone()))?;
@@ -1058,6 +1065,7 @@ async fn get_relay_addr(
     dns_resolver: &DnsResolver,
     relay_node: &RelayNode,
     proto: ProbeProto,
+    ip_mapped_addrs: Option<IpMappedAddrs>,
 ) -> Result<SocketAddr> {
     if relay_node.stun_only && !matches!(proto, ProbeProto::StunIpv4 | ProbeProto::StunIpv6) {
         bail!("Relay node not suitable for non-STUN probes");
@@ -1074,11 +1082,16 @@ async fn get_relay_addr(
                             .next()
                             .map(|ip| ip.to_canonical())
                             .map(|addr| SocketAddr::new(addr, port))
+                            .map(|addr| maybe_to_mapped_addr(ip_mapped_addrs, proto, addr))
                             .ok_or(anyhow!("No suitable relay addr found")),
                         Err(err) => Err(err.context("No suitable relay addr found")),
                     }
                 }
-                Some(url::Host::Ipv4(addr)) => Ok(SocketAddr::new(addr.into(), port)),
+                Some(url::Host::Ipv4(addr)) => Ok(maybe_to_mapped_addr(
+                    ip_mapped_addrs,
+                    proto,
+                    SocketAddr::new(addr.into(), port),
+                )),
                 Some(url::Host::Ipv6(_addr)) => Err(anyhow!("No suitable relay addr found")),
                 None => Err(anyhow!("No valid hostname in RelayUrl")),
             }
@@ -1093,18 +1106,37 @@ async fn get_relay_addr(
                             .next()
                             .map(|ip| ip.to_canonical())
                             .map(|addr| SocketAddr::new(addr, port))
+                            .map(|addr| maybe_to_mapped_addr(ip_mapped_addrs, proto, addr))
                             .ok_or(anyhow!("No suitable relay addr found")),
                         Err(err) => Err(err.context("No suitable relay addr found")),
                     }
                 }
                 Some(url::Host::Ipv4(_addr)) => Err(anyhow!("No suitable relay addr found")),
-                Some(url::Host::Ipv6(addr)) => Ok(SocketAddr::new(addr.into(), port)),
+                Some(url::Host::Ipv6(addr)) => Ok(maybe_to_mapped_addr(
+                    ip_mapped_addrs,
+                    proto,
+                    SocketAddr::new(addr.into(), port),
+                )),
                 None => Err(anyhow!("No valid hostname in RelayUrl")),
             }
         }
 
         ProbeProto::Https => Err(anyhow!("Not implemented")),
     }
+}
+
+fn maybe_to_mapped_addr(
+    ip_mapped_addrs: Option<IpMappedAddrs>,
+    proto: ProbeProto,
+    addr: SocketAddr,
+) -> SocketAddr {
+    if !matches!(proto, ProbeProto::QuicIpv4 | ProbeProto::QuicIpv6) {
+        return addr;
+    }
+    if let Some(ip_mapped_addrs) = ip_mapped_addrs.as_ref() {
+        return ip_mapped_addrs.add(addr).addr();
+    }
+    addr
 }
 
 /// Runs an ICMP IPv4 or IPv6 probe.
