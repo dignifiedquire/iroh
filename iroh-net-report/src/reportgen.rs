@@ -27,6 +27,7 @@ use std::{
 };
 
 use anyhow::{anyhow, bail, Context as _, Result};
+use futures_lite::StreamExt as _;
 use hickory_resolver::TokioResolver as DnsResolver;
 use iroh_base::RelayUrl;
 #[cfg(feature = "metrics")]
@@ -57,6 +58,7 @@ use crate::{
     Report,
 };
 
+#[cfg(not(wasm_browser))]
 mod hairpin;
 mod probes;
 
@@ -87,12 +89,12 @@ impl Client {
     pub(super) fn new(
         net_report: net_report::Addr,
         last_report: Option<Arc<Report>>,
-        port_mapper: Option<portmapper::Client>,
+        #[cfg(not(wasm_browser))] port_mapper: Option<portmapper::Client>,
         relay_map: RelayMap,
         stun_sock4: Option<Arc<UdpSocket>>,
         stun_sock6: Option<Arc<UdpSocket>>,
         quic_config: Option<QuicConfig>,
-        dns_resolver: DnsResolver,
+        #[cfg(not(wasm_browser))] dns_resolver: DnsResolver,
         protocols: BTreeSet<ProbeProto>,
     ) -> Self {
         let (msg_tx, msg_rx) = mpsc::channel(32);
@@ -104,14 +106,17 @@ impl Client {
             msg_rx,
             net_report: net_report.clone(),
             last_report,
+            #[cfg(not(wasm_browser))]
             port_mapper,
             relay_map,
             stun_sock4,
             stun_sock6,
             quic_config,
             report: Report::default(),
+            #[cfg(not(wasm_browser))]
             hairpin_actor: hairpin::Client::new(net_report, addr),
             outstanding_tasks: OutstandingTasks::default(),
+            #[cfg(not(wasm_browser))]
             dns_resolver,
             protocols,
         };
@@ -176,6 +181,7 @@ struct Actor {
     /// The previous report, if it exists.
     last_report: Option<Arc<Report>>,
     /// The portmapper client, if there is one.
+    #[cfg(not(wasm_browser))]
     port_mapper: Option<portmapper::Client>,
     /// The relay configuration.
     relay_map: RelayMap,
@@ -190,6 +196,7 @@ struct Actor {
     /// The report being built.
     report: Report,
     /// The hairpin actor.
+    #[cfg(not(wasm_browser))]
     hairpin_actor: hairpin::Client,
     /// Which tasks the [`Actor`] is still waiting on.
     ///
@@ -234,14 +241,18 @@ impl Actor {
     ///   - Updates the report, cancels unneeded futures.
     /// - Sends the report to the net_report actor.
     async fn run_inner(&mut self) -> Result<()> {
-        debug!(
-            port_mapper = %self.port_mapper.is_some(),
-            "reportstate actor starting",
-        );
+        #[cfg(not(wasm_browser))]
+        let port_mapper = self.port_mapper.is_some();
+        #[cfg(wasm_browser)]
+        let port_mapper = false;
+        debug!(%port_mapper, "reportstate actor starting");
 
         self.report.os_has_ipv6 = super::os_has_ipv6();
 
+        #[cfg(not(wasm_browser))]
         let mut port_mapping = self.prepare_portmapper_task();
+        #[cfg(wasm_browser)]
+        let mut port_mapping = futures_lite::future::pending();
         let mut captive_task = self.prepare_captive_portal_task();
         let mut probes = self.spawn_probes_task().await?;
 
@@ -275,10 +286,14 @@ impl Actor {
 
                 // Drive the portmapper.
                 pm = &mut port_mapping, if self.outstanding_tasks.port_mapper => {
-                    debug!(report=?pm, "tick: portmapper probe report");
-                    self.report.portmap_probe = pm;
-                    port_mapping.inner = None;
-                    self.outstanding_tasks.port_mapper = false;
+                    // This future is completely disabled in wasm anyways.
+                    #[cfg(not(wasm_browser))]
+                    {
+                        debug!(report=?pm, "tick: portmapper probe report");
+                        self.report.portmap_probe = pm;
+                        port_mapping.inner = None;
+                        self.outstanding_tasks.port_mapper = false;
+                    }
                 }
 
                 // Check for probes finishing.
@@ -361,6 +376,7 @@ impl Actor {
         update_report(&mut self.report, probe_report);
 
         // When we discover the first IPv4 address we want to start the hairpin actor.
+        #[cfg(not(wasm_browser))]
         if let Some(ref addr) = self.report.global_v4 {
             if !self.hairpin_actor.has_started() {
                 self.hairpin_actor.start_check(*addr);
@@ -445,6 +461,7 @@ impl Actor {
     /// Creates the future which will perform the portmapper task.
     ///
     /// The returned future will run the portmapper, if enabled, resolving to it's result.
+    #[cfg(not(wasm_browser))]
     fn prepare_portmapper_task(
         &mut self,
     ) -> MaybeFuture<Pin<Box<impl Future<Output = Option<portmapper::ProbeOutput>>>>> {
@@ -500,6 +517,7 @@ impl Actor {
                         Ok(Err(err)) => {
                             let err: Result<reqwest::Error, _> = err.downcast();
                             match err {
+                                #[cfg(not(wasm_browser))]
                                 Ok(req_err) if req_err.is_connect() => {
                                     debug!("check_captive_portal failed: {req_err:#}");
                                 }
@@ -540,13 +558,24 @@ impl Actor {
     ///   - Once there are [`ProbeReport`]s from enough nodes, all remaining probes are
     ///     aborted.  That is, the main actor loop stops polling them.
     async fn spawn_probes_task(&mut self) -> Result<JoinSet<Result<ProbeReport>>> {
+        #[cfg(not(wasm_browser))]
         let if_state = interfaces::State::new().await;
+        #[cfg(not(wasm_browser))]
         debug!(%if_state, "Local interfaces");
         let plan = match self.last_report {
-            Some(ref report) => {
-                ProbePlan::with_last_report(&self.relay_map, &if_state, report, &self.protocols)
-            }
-            None => ProbePlan::initial(&self.relay_map, &if_state, &self.protocols),
+            Some(ref report) => ProbePlan::with_last_report(
+                &self.relay_map,
+                #[cfg(not(wasm_browser))]
+                &if_state,
+                report,
+                &self.protocols,
+            ),
+            None => ProbePlan::initial(
+                &self.relay_map,
+                #[cfg(not(wasm_browser))]
+                &if_state,
+                &self.protocols,
+            ),
         };
         trace!(%plan, "probe plan");
 
@@ -977,7 +1006,14 @@ async fn check_captive_portal(
         }
     };
 
-    let mut builder = reqwest::ClientBuilder::new().redirect(reqwest::redirect::Policy::none());
+    let mut builder = reqwest::ClientBuilder::new();
+
+    #[cfg(not(wasm_browser))]
+    {
+        builder = builder.redirect(reqwest::redirect::Policy::none());
+    }
+
+    #[cfg(not(wasm_browser))]
     if let Some(Host::Domain(domain)) = url.host() {
         // Use our own resolver rather than getaddrinfo
         //
@@ -1131,6 +1167,7 @@ async fn run_icmp_probe(
                 anyhow!("Failed to create pinger ({err:#}), aborting probeset"),
                 probe.clone(),
             ),
+            #[cfg(not(wasm_browser))]
             PingError::Ping(err) => ProbeError::Error(err.into(), probe.clone()),
         })?;
     debug!(dst = %relay_addr, len = DATA.len(), ?latency, "ICMP ping done");
@@ -1164,7 +1201,14 @@ async fn measure_https_latency(
     // This should also use same connection establishment as relay client itself, which
     // needs to be more configurable so users can do more crazy things:
     // https://github.com/n0-computer/iroh/issues/2901
-    let mut builder = reqwest::ClientBuilder::new().redirect(reqwest::redirect::Policy::none());
+    let mut builder = reqwest::ClientBuilder::new();
+
+    #[cfg(not(wasm_browser))]
+    {
+        builder = builder.redirect(reqwest::redirect::Policy::none());
+    }
+
+    #[cfg(not(wasm_browser))]
     if let Some(Host::Domain(domain)) = url.host() {
         // Use our own resolver rather than getaddrinfo
         //
@@ -1180,6 +1224,8 @@ async fn measure_https_latency(
             .collect();
         builder = builder.resolve_to_addrs(domain, &addrs);
     }
+
+    #[cfg(not(wasm_browser))]
     if let Some(certs) = certs {
         for cert in certs {
             let cert = reqwest::Certificate::from_der(&cert)?;
@@ -1189,24 +1235,30 @@ async fn measure_https_latency(
     let client = builder.build()?;
 
     let start = Instant::now();
-    let mut response = client.request(reqwest::Method::GET, url).send().await?;
+    let response = client.request(reqwest::Method::GET, url).send().await?;
     let latency = start.elapsed();
     if response.status().is_success() {
+        // Only `None` if a different hyper HttpConnector in the request.
+        #[cfg(not(wasm_browser))]
+        let remote_ip = response
+            .remote_addr()
+            .context("missing HttpInfo from HttpConnector")?
+            .ip();
+        #[cfg(wasm_browser)]
+        let remote_ip = IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED);
+
         // Drain the response body to be nice to the server, up to a limit.
         const MAX_BODY_SIZE: usize = 8 << 10; // 8 KiB
         let mut body_size = 0;
-        while let Some(chunk) = response.chunk().await? {
+        let mut stream = response.bytes_stream();
+        // ignore failing frames
+        while let Some(Ok(chunk)) = stream.next().await {
             body_size += chunk.len();
             if body_size >= MAX_BODY_SIZE {
                 break;
             }
         }
 
-        // Only `None` if a different hyper HttpConnector in the request.
-        let remote_ip = response
-            .remote_addr()
-            .context("missing HttpInfo from HttpConnector")?
-            .ip();
         Ok((latency, remote_ip))
     } else {
         Err(anyhow!(

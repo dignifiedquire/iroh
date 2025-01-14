@@ -9,6 +9,7 @@ use std::{collections::BTreeSet, fmt, sync::Arc};
 use anyhow::{ensure, Result};
 use iroh_base::RelayUrl;
 use iroh_relay::{RelayMap, RelayNode};
+#[cfg(not(wasm_browser))]
 use netwatch::interfaces;
 use tokio::time::Duration;
 
@@ -223,7 +224,7 @@ impl ProbePlan {
     /// Creates an initial probe plan.
     pub(super) fn initial(
         relay_map: &RelayMap,
-        if_state: &interfaces::State,
+        #[cfg(not(wasm_browser))] if_state: &interfaces::State,
         protocols: &BTreeSet<ProbeProto>,
     ) -> Self {
         let mut plan = Self {
@@ -326,12 +327,17 @@ impl ProbePlan {
     /// Creates a follow up probe plan using a previous net_report report.
     pub(super) fn with_last_report(
         relay_map: &RelayMap,
-        if_state: &interfaces::State,
+        #[cfg(not(wasm_browser))] if_state: &interfaces::State,
         last_report: &Report,
         protocols: &BTreeSet<ProbeProto>,
     ) -> Self {
         if last_report.relay_latency.is_empty() {
-            return Self::initial(relay_map, if_state, protocols);
+            return Self::initial(
+                relay_map,
+                #[cfg(not(wasm_browser))]
+                if_state,
+                protocols,
+            );
         }
         let mut plan = Self {
             set: Default::default(),

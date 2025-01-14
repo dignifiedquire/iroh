@@ -18,6 +18,7 @@ use std::{
 
 use anyhow::{anyhow, Result};
 use bytes::Bytes;
+#[cfg(not(wasm_browser))]
 use hickory_resolver::TokioResolver as DnsResolver;
 use iroh_base::RelayUrl;
 #[cfg(feature = "metrics")]
@@ -86,6 +87,7 @@ pub struct Report {
     /// public IP address (on IPv4).
     pub hair_pinning: Option<bool>,
     /// Probe indicating the presence of port mapping protocols on the LAN.
+    #[cfg(not(wasm_browser))]
     pub portmap_probe: Option<portmapper::ProbeOutput>,
     /// `None` for unknown
     pub preferred_relay: Option<RelayUrl>,
@@ -348,8 +350,23 @@ impl Client {
     ///
     /// This starts a connected actor in the background.  Once the client is dropped it will
     /// stop running.
+    #[cfg(not(wasm_browser))]
     pub fn new(port_mapper: Option<portmapper::Client>, dns_resolver: DnsResolver) -> Result<Self> {
         let mut actor = Actor::new(port_mapper, dns_resolver)?;
+        let addr = actor.addr();
+        let task = tokio::spawn(
+            async move { actor.run().await }.instrument(info_span!("net_report.actor")),
+        );
+        let drop_guard = AbortOnDropHandle::new(task);
+        Ok(Client {
+            addr,
+            _drop_guard: Arc::new(drop_guard),
+        })
+    }
+
+    #[cfg(wasm_browser)]
+    pub fn new() -> Self {
+        let mut actor = Actor::new();
         let addr = actor.addr();
         let task = tokio::spawn(
             async move { actor.run().await }.instrument(info_span!("net_report.actor")),
@@ -554,6 +571,7 @@ struct Actor {
     ///
     /// The port mapper is responsible for talking to routers via UPnP and the like to try
     /// and open ports.
+    #[cfg(not(wasm_browser))]
     port_mapper: Option<portmapper::Client>,
 
     // Actor state.
@@ -565,6 +583,7 @@ struct Actor {
     current_report_run: Option<ReportRun>,
 
     /// The DNS resolver to use for probes that need to perform DNS lookups
+    #[cfg(not(wasm_browser))]
     dns_resolver: DnsResolver,
 }
 
@@ -573,6 +592,7 @@ impl Actor {
     ///
     /// This does not start the actor, see [`Actor::run`] for this.  You should not
     /// normally create this directly but rather create a [`Client`].
+    #[cfg(not(wasm_browser))]
     fn new(port_mapper: Option<portmapper::Client>, dns_resolver: DnsResolver) -> Result<Self> {
         // TODO: consider an instrumented flume channel so we have metrics.
         let (sender, receiver) = mpsc::channel(32);
@@ -585,6 +605,18 @@ impl Actor {
             current_report_run: None,
             dns_resolver,
         })
+    }
+
+    #[cfg(wasm_browser)]
+    fn new() -> Self {
+        let (sender, receiver) = mpsc::channel(32);
+        Self {
+            receiver,
+            sender,
+            reports: Default::default(),
+            in_flight_stun_requests: Default::default(),
+            current_report_run: None,
+        }
     }
 
     /// Returns the channel to send messages to the actor.
