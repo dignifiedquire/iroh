@@ -35,12 +35,10 @@ use concurrent_queue::ConcurrentQueue;
 use data_encoding::HEXLOWER;
 use futures_lite::{FutureExt, StreamExt};
 use futures_util::{stream::BoxStream, task::AtomicWaker};
-use iroh_base::{
-    IpMappedAddr, IpMappedAddrs, NodeAddr, NodeId, PublicKey, RelayUrl, SecretKey, MAPPED_ADDR_PORT,
-};
+use iroh_base::{NodeAddr, NodeId, PublicKey, RelayUrl, SecretKey};
 use iroh_metrics::{inc, inc_by};
 use iroh_relay::{protos::stun, RelayMap};
-use net_report::QuicConfig;
+use net_report::{IpMappedAddr, IpMappedAddrs, QuicConfig, MAPPED_ADDR_PORT};
 use netwatch::{interfaces, ip::LocalAddresses, netmon, UdpSocket};
 use quinn::{AsyncUdpSocket, ServerConfig};
 use rand::{seq::SliceRandom, Rng, SeedableRng};
