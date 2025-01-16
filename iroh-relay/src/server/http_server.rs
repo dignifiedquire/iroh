@@ -7,7 +7,13 @@ use bytes::Bytes;
 use derive_more::Debug;
 use futures_lite::FutureExt;
 use futures_util::SinkExt;
-use http::{header::CONNECTION, response::Builder as ResponseBuilder};
+use http::{
+    header::{
+        ACCESS_CONTROL_ALLOW_HEADERS, ACCESS_CONTROL_ALLOW_METHODS, ACCESS_CONTROL_ALLOW_ORIGIN,
+        CONNECTION,
+    },
+    response::Builder as ResponseBuilder,
+};
 use hyper::{
     body::Incoming,
     header::{HeaderValue, UPGRADE},
@@ -332,6 +338,7 @@ impl RelayService {
         for (key, value) in self.0.headers.iter() {
             builder = builder.header(key, value);
         }
+        builder = builder.header(ACCESS_CONTROL_ALLOW_ORIGIN, "*");
 
         async move {
             {
@@ -433,6 +440,16 @@ impl Service<Request<Incoming>> for RelayService {
     type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
 
     fn call(&self, req: Request<Incoming>) -> Self::Future {
+        if req.method() == Method::OPTIONS {
+            return Box::pin(async move {
+                Ok(Response::builder()
+                    .header(ACCESS_CONTROL_ALLOW_METHODS, "*")
+                    .header(ACCESS_CONTROL_ALLOW_HEADERS, "*")
+                    .header(ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                    .body(body_empty())?)
+            });
+        }
+
         // Create a client if the request hits the relay endpoint.
         if matches!(
             (req.method(), req.uri().path()),
@@ -461,6 +478,7 @@ impl Inner {
         for (key, value) in self.headers.iter() {
             response = response.header(key.clone(), value.clone());
         }
+        response = response.header(ACCESS_CONTROL_ALLOW_ORIGIN, "*");
         response
     }
 

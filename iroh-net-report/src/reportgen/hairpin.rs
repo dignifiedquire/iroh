@@ -175,6 +175,7 @@ impl Actor {
 
 #[cfg(test)]
 mod tests {
+    use crate::time::Duration;
     use bytes::BytesMut;
     use tokio::sync::mpsc;
     use tracing::info;
