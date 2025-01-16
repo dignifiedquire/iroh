@@ -10,7 +10,7 @@ use futures_util::SinkExt;
 use http::{
     header::{
         ACCESS_CONTROL_ALLOW_HEADERS, ACCESS_CONTROL_ALLOW_METHODS, ACCESS_CONTROL_ALLOW_ORIGIN,
-        CONNECTION,
+        CONNECTION, ORIGIN,
     },
     response::Builder as ResponseBuilder,
 };
@@ -338,7 +338,9 @@ impl RelayService {
         for (key, value) in self.0.headers.iter() {
             builder = builder.header(key, value);
         }
-        builder = builder.header(ACCESS_CONTROL_ALLOW_ORIGIN, "*");
+        if let Some(origin) = req.headers().get(ORIGIN) {
+            builder = builder.header(ACCESS_CONTROL_ALLOW_ORIGIN, origin);
+        }
 
         async move {
             {
@@ -462,23 +464,26 @@ impl Service<Request<Incoming>> for RelayService {
 
         // Check all other possible endpoints.
         let uri = req.uri().clone();
+        let origin = req.headers().get(ORIGIN).cloned();
         if let Some(res) = self.0.handlers.get(&(req.method().clone(), uri.path())) {
-            let f = res(req, self.0.default_response());
+            let f = res(req, self.0.default_response(origin));
             return Box::pin(async move { f });
         }
         // Otherwise return 404
-        let res = self.0.not_found_fn(req, self.0.default_response());
+        let res = self.0.not_found_fn(req, self.0.default_response(origin));
         Box::pin(async move { res })
     }
 }
 
 impl Inner {
-    fn default_response(&self) -> ResponseBuilder {
+    fn default_response(&self, origin: Option<HeaderValue>) -> ResponseBuilder {
         let mut response = Response::builder();
         for (key, value) in self.headers.iter() {
             response = response.header(key.clone(), value.clone());
         }
-        response = response.header(ACCESS_CONTROL_ALLOW_ORIGIN, "*");
+        if let Some(origin) = origin {
+            response = response.header(ACCESS_CONTROL_ALLOW_ORIGIN, origin);
+        }
         response
     }
 
