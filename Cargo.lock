@@ -2220,6 +2220,7 @@ dependencies = [
  "iroh-relay",
  "iroh-test 0.31.0",
  "netwatch",
+ "pin-project",
  "portmapper",
  "pretty_assertions",
  "rand",
@@ -2232,6 +2233,8 @@ dependencies = [
  "tokio-util",
  "tracing",
  "url",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
 ]
 
 [[package]]

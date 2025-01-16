@@ -26,8 +26,10 @@ use std::{
     time::Duration,
 };
 
+use crate::task::{self, AbortOnDropHandle, JoinSet};
 use anyhow::{anyhow, bail, Context as _, Result};
 use futures_lite::StreamExt as _;
+#[cfg(not(wasm_browser))]
 use hickory_resolver::TokioResolver as DnsResolver;
 use iroh_base::RelayUrl;
 #[cfg(feature = "metrics")]
@@ -38,25 +40,23 @@ use iroh_relay::{
     protos::stun,
     RelayMap, RelayNode,
 };
+#[cfg(not(wasm_browser))]
 use netwatch::{interfaces, UdpSocket};
 use rand::seq::IteratorRandom;
 use tokio::{
     sync::{mpsc, oneshot},
-    task::JoinSet,
     time::{self, Instant},
 };
-use tokio_util::task::AbortOnDropHandle;
 use tracing::{debug, debug_span, error, info_span, trace, warn, Instrument, Span};
 use url::Host;
 
+#[cfg(not(wasm_browser))]
+use crate::dns::ResolverExt;
+#[cfg(not(wasm_browser))]
+use crate::ping::{PingError, Pinger};
 #[cfg(feature = "metrics")]
 use crate::Metrics;
-use crate::{
-    self as net_report,
-    dns::ResolverExt,
-    ping::{PingError, Pinger},
-    Report,
-};
+use crate::{self as net_report, Report};
 
 #[cfg(not(wasm_browser))]
 mod hairpin;
@@ -91,9 +91,9 @@ impl Client {
         last_report: Option<Arc<Report>>,
         #[cfg(not(wasm_browser))] port_mapper: Option<portmapper::Client>,
         relay_map: RelayMap,
-        stun_sock4: Option<Arc<UdpSocket>>,
-        stun_sock6: Option<Arc<UdpSocket>>,
-        quic_config: Option<QuicConfig>,
+        #[cfg(not(wasm_browser))] stun_sock4: Option<Arc<UdpSocket>>,
+        #[cfg(not(wasm_browser))] stun_sock6: Option<Arc<UdpSocket>>,
+        #[cfg(not(wasm_browser))] quic_config: Option<QuicConfig>,
         #[cfg(not(wasm_browser))] dns_resolver: DnsResolver,
         protocols: BTreeSet<ProbeProto>,
     ) -> Self {
@@ -109,8 +109,11 @@ impl Client {
             #[cfg(not(wasm_browser))]
             port_mapper,
             relay_map,
+            #[cfg(not(wasm_browser))]
             stun_sock4,
+            #[cfg(not(wasm_browser))]
             stun_sock6,
+            #[cfg(not(wasm_browser))]
             quic_config,
             report: Report::default(),
             #[cfg(not(wasm_browser))]
@@ -120,9 +123,8 @@ impl Client {
             dns_resolver,
             protocols,
         };
-        let task = tokio::spawn(
-            async move { actor.run().await }.instrument(info_span!("reportgen.actor")),
-        );
+        let task =
+            task::spawn(async move { actor.run().await }.instrument(info_span!("reportgen.actor")));
         Self {
             _drop_guard: AbortOnDropHandle::new(task),
         }
@@ -186,10 +188,13 @@ struct Actor {
     /// The relay configuration.
     relay_map: RelayMap,
     /// Socket to send IPv4 STUN requests from.
+    #[cfg(not(wasm_browser))]
     stun_sock4: Option<Arc<UdpSocket>>,
     /// Socket so send IPv6 STUN requests from.
+    #[cfg(not(wasm_browser))]
     stun_sock6: Option<Arc<UdpSocket>>,
     /// QUIC configuration to do QUIC address Discovery
+    #[cfg(not(wasm_browser))]
     quic_config: Option<QuicConfig>,
 
     // Internal state.
@@ -203,6 +208,7 @@ struct Actor {
     /// This is essentially the summary of all the work the [`Actor`] is doing.
     outstanding_tasks: OutstandingTasks,
     /// The DNS resolver to use for probes that need to resolve DNS records.
+    #[cfg(not(wasm_browser))]
     dns_resolver: DnsResolver,
     /// Protocols we should attempt to create probes for, if we have the correct
     /// configuration for that protocol.
@@ -425,6 +431,7 @@ impl Actor {
         }
 
         // If the probe is for IPv6 and we don't yet have an IPv6 report, that would help.
+        #[cfg(not(wasm_browser))]
         if probe.proto() == ProbeProto::StunIpv6 && self.report.relay_v6_latency.is_empty() {
             return true;
         }
@@ -435,6 +442,7 @@ impl Actor {
         // talking to. If we don't yet have two results yet
         // (`mapping_varies_by_dest_ip` is blank), then another IPv4 probe
         // would be good.
+        #[cfg(not(wasm_browser))]
         if probe.proto() == ProbeProto::StunIpv4 && self.report.mapping_varies_by_dest_ip.is_none()
         {
             return true;
@@ -500,6 +508,7 @@ impl Actor {
                 .as_ref()
                 .and_then(|l| l.preferred_relay.clone());
 
+            #[cfg(not(wasm_browser))]
             let dns_resolver = self.dns_resolver.clone();
             let dm = self.relay_map.clone();
             self.outstanding_tasks.captive_task = true;
@@ -509,8 +518,13 @@ impl Actor {
                     debug!("Captive portal check started after {CAPTIVE_PORTAL_DELAY:?}");
                     let captive_portal_check = tokio::time::timeout(
                         CAPTIVE_PORTAL_TIMEOUT,
-                        check_captive_portal(&dns_resolver, &dm, preferred_relay)
-                            .instrument(debug_span!("captive-portal")),
+                        check_captive_portal(
+                            #[cfg(not(wasm_browser))]
+                            &dns_resolver,
+                            &dm,
+                            preferred_relay,
+                        )
+                        .instrument(debug_span!("captive-portal")),
                     );
                     match captive_portal_check.await {
                         Ok(Ok(found)) => Some(found),
@@ -582,6 +596,7 @@ impl Actor {
         // The pinger is created here so that any sockets that might be bound for it are
         // shared between the probes that use it.  It binds sockets lazily, so we can always
         // create it.
+        #[cfg(not(wasm_browser))]
         let pinger = Pinger::new();
 
         // A collection of futures running probe sets.
@@ -590,25 +605,35 @@ impl Actor {
             let mut set = JoinSet::default();
             for probe in probe_set {
                 let reportstate = self.addr();
+                #[cfg(not(wasm_browser))]
                 let stun_sock4 = self.stun_sock4.clone();
+                #[cfg(not(wasm_browser))]
                 let stun_sock6 = self.stun_sock6.clone();
+                #[cfg(not(wasm_browser))]
                 let quic_config = self.quic_config.clone();
                 let relay_node = probe.node().clone();
                 let probe = probe.clone();
                 let net_report = self.net_report.clone();
+                #[cfg(not(wasm_browser))]
                 let pinger = pinger.clone();
+                #[cfg(not(wasm_browser))]
                 let dns_resolver = self.dns_resolver.clone();
 
                 set.spawn(
                     run_probe(
                         reportstate,
+                        #[cfg(not(wasm_browser))]
                         stun_sock4,
+                        #[cfg(not(wasm_browser))]
                         stun_sock6,
+                        #[cfg(not(wasm_browser))]
                         quic_config,
                         relay_node,
                         probe.clone(),
                         net_report,
+                        #[cfg(not(wasm_browser))]
                         pinger,
+                        #[cfg(not(wasm_browser))]
                         dns_resolver,
                     )
                     .instrument(debug_span!("run_probe", %probe)),
@@ -737,14 +762,14 @@ pub struct QuicConfig {
 #[allow(clippy::too_many_arguments)]
 async fn run_probe(
     reportstate: Addr,
-    stun_sock4: Option<Arc<UdpSocket>>,
-    stun_sock6: Option<Arc<UdpSocket>>,
-    quic_config: Option<QuicConfig>,
+    #[cfg(not(wasm_browser))] stun_sock4: Option<Arc<UdpSocket>>,
+    #[cfg(not(wasm_browser))] stun_sock6: Option<Arc<UdpSocket>>,
+    #[cfg(not(wasm_browser))] quic_config: Option<QuicConfig>,
     relay_node: Arc<RelayNode>,
     probe: Probe,
     net_report: net_report::Addr,
-    pinger: Pinger,
-    dns_resolver: DnsResolver,
+    #[cfg(not(wasm_browser))] pinger: Pinger,
+    #[cfg(not(wasm_browser))] dns_resolver: DnsResolver,
 ) -> Result<ProbeReport, ProbeError> {
     if !probe.delay().is_zero() {
         trace!("delaying probe");
@@ -778,6 +803,7 @@ async fn run_probe(
         ));
     }
 
+    #[cfg(not(wasm_browser))]
     let relay_addr = get_relay_addr(&dns_resolver, &relay_node, probe.proto())
         .await
         .context("no relay node addr")
@@ -785,6 +811,7 @@ async fn run_probe(
 
     let mut result = ProbeReport::new(probe.clone());
     match probe {
+        #[cfg(not(wasm_browser))]
         Probe::StunIpv4 { .. } | Probe::StunIpv6 { .. } => {
             let maybe_sock = if matches!(probe, Probe::StunIpv4 { .. }) {
                 stun_sock4.as_ref()
@@ -803,12 +830,20 @@ async fn run_probe(
                 }
             }
         }
+        #[cfg(not(wasm_browser))]
         Probe::IcmpV4 { .. } | Probe::IcmpV6 { .. } => {
             result = run_icmp_probe(probe, relay_addr, pinger).await?
         }
         Probe::Https { ref node, .. } => {
             debug!("sending probe HTTPS");
-            match measure_https_latency(&dns_resolver, node, None).await {
+            match measure_https_latency(
+                #[cfg(not(wasm_browser))]
+                &dns_resolver,
+                node,
+                None,
+            )
+            .await
+            {
                 Ok((latency, ip)) => {
                     result.latency = Some(latency);
                     // We set these IPv4 and IPv6 but they're not really used
@@ -827,6 +862,7 @@ async fn run_probe(
             }
         }
 
+        #[cfg(not(wasm_browser))]
         Probe::QuicIpv4 { ref node, .. } | Probe::QuicIpv6 { ref node, .. } => {
             debug!("sending QUIC address discovery probe");
             let url = node.url.clone();
@@ -849,6 +885,7 @@ async fn run_probe(
 }
 
 /// Run a STUN IPv4 or IPv6 probe.
+#[cfg(not(wasm_browser))]
 async fn run_stun_probe(
     sock: &Arc<UdpSocket>,
     relay_addr: SocketAddr,
@@ -932,6 +969,7 @@ async fn run_stun_probe(
 }
 
 /// Run a QUIC address discovery probe.
+#[cfg(not(wasm_browser))]
 async fn run_quic_probe(
     quic_config: QuicConfig,
     url: RelayUrl,
@@ -975,7 +1013,7 @@ async fn run_quic_probe(
 ///
 /// The boolean return is whether we think we have a captive portal.
 async fn check_captive_portal(
-    dns_resolver: &DnsResolver,
+    #[cfg(not(wasm_browser))] dns_resolver: &DnsResolver,
     dm: &RelayMap,
     preferred_relay: Option<RelayUrl>,
 ) -> Result<bool> {
@@ -1064,6 +1102,7 @@ async fn check_captive_portal(
 /// Returns the proper port based on the protocol of the probe.
 fn get_port(relay_node: &RelayNode, proto: &ProbeProto) -> Result<u16> {
     match proto {
+        #[cfg(not(wasm_browser))]
         ProbeProto::QuicIpv4 | ProbeProto::QuicIpv6 => {
             if let Some(ref quic) = relay_node.quic {
                 if quic.port == 0 {
@@ -1090,6 +1129,7 @@ fn get_port(relay_node: &RelayNode, proto: &ProbeProto) -> Result<u16> {
 /// *proto* specifies the protocol of the probe.  Depending on the protocol we may return
 /// different results.  Obviously IPv4 vs IPv6 but a [`RelayNode`] may also have disabled
 /// some protocols.
+#[cfg(not(wasm_browser))]
 async fn get_relay_addr(
     dns_resolver: &DnsResolver,
     relay_node: &RelayNode,
@@ -1147,6 +1187,7 @@ async fn get_relay_addr(
 ///
 /// The `pinger` is passed in so the ping sockets are only bound once
 /// for the probe set.
+#[cfg(not(wasm_browser))]
 async fn run_icmp_probe(
     probe: Probe,
     relay_addr: SocketAddr,
@@ -1192,7 +1233,7 @@ async fn run_icmp_probe(
 /// use of self-signed certificates for servers.  Currently this is used for testing.
 #[allow(clippy::unused_async)]
 async fn measure_https_latency(
-    dns_resolver: &DnsResolver,
+    #[cfg(not(wasm_browser))] dns_resolver: &DnsResolver,
     node: &RelayNode,
     certs: Option<Vec<rustls::pki_types::CertificateDer<'static>>>,
 ) -> Result<(Duration, IpAddr)> {
@@ -1276,6 +1317,7 @@ fn update_report(report: &mut Report, probe_report: ProbeReport) {
             .relay_latency
             .update_relay(relay_node.url.clone(), latency);
 
+        #[cfg(not(wasm_browser))]
         if matches!(
             probe_report.probe.proto(),
             ProbeProto::StunIpv4

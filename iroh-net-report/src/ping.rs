@@ -20,7 +20,6 @@ pub enum PingError {
     #[error("Error creating ping client")]
     Client(#[from] anyhow::Error),
     /// Could not send ping.
-    #[cfg(not(wasm_browser))]
     #[error("Error sending ping")]
     Ping(#[from] surge_ping::SurgeError),
 }
