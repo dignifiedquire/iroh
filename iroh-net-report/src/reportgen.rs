@@ -771,7 +771,7 @@ async fn run_probe(
 ) -> Result<ProbeReport, ProbeError> {
     if !probe.delay().is_zero() {
         trace!("delaying probe");
-        tokio::time::sleep(probe.delay()).await;
+        time::sleep(probe.delay()).await;
     }
     debug!("starting probe");
 

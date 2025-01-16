@@ -21,7 +21,9 @@ use tokio::{sync::oneshot, time::Instant};
 use tokio_util::task::AbortOnDropHandle;
 use tracing::{debug, error, info_span, trace, warn, Instrument};
 
-use crate::{self as net_report, defaults::timeouts::HAIRPIN_CHECK_TIMEOUT, reportgen, Inflight};
+use crate::{
+    self as net_report, defaults::timeouts::HAIRPIN_CHECK_TIMEOUT, reportgen, task, time, Inflight,
+};
 
 /// Handle to the hairpin actor.
 ///
@@ -43,7 +45,7 @@ impl Client {
         };
 
         let task =
-            tokio::spawn(async move { actor.run().await }.instrument(info_span!("hairpin.actor")));
+            task::spawn(async move { actor.run().await }.instrument(info_span!("hairpin.actor")));
         Self {
             addr: Some(addr),
             _drop_guard: AbortOnDropHandle::new(task),
@@ -127,7 +129,7 @@ impl Actor {
         }
 
         let now = Instant::now();
-        let hairpinning_works = match tokio::time::timeout(HAIRPIN_CHECK_TIMEOUT, stun_rx).await {
+        let hairpinning_works = match time::timeout(HAIRPIN_CHECK_TIMEOUT, stun_rx).await {
             Ok(Ok(_)) => true,
             Ok(Err(_)) => bail!("net_report actor dropped stun response channel"),
             Err(_) => false, // Elapsed
@@ -173,8 +175,6 @@ impl Actor {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
     use bytes::BytesMut;
     use tokio::sync::mpsc;
     use tracing::info;
@@ -252,7 +252,7 @@ mod tests {
                     // We want hairpinning to fail, just wait but do not drop the STUN response
                     // channel because that would make the hairpin actor detect an error.
                     info!("Received hairpin request, not sending response");
-                    tokio::time::sleep(HAIRPIN_CHECK_TIMEOUT * 8).await;
+                    time::sleep(HAIRPIN_CHECK_TIMEOUT * 8).await;
                 }
             }
             .instrument(info_span!("dummy-net_report")),

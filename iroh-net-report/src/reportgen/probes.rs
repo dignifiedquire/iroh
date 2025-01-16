@@ -11,8 +11,8 @@ use iroh_base::RelayUrl;
 use iroh_relay::{RelayMap, RelayNode};
 #[cfg(not(wasm_browser))]
 use netwatch::interfaces;
-use tokio::time::Duration;
 
+use crate::time::Duration;
 use crate::Report;
 
 /// The retransmit interval used when net_report first runs.

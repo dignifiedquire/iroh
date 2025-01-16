@@ -1064,12 +1064,11 @@ mod tests {
 
     use bytes::BytesMut;
     use netwatch::IpFamily;
-    use tokio::time;
     use tokio_util::sync::CancellationToken;
     use tracing::info;
 
     use super::*;
-    use crate::{ping::Pinger, stun_utils::bind_local_stun_socket};
+    use crate::{ping::Pinger, stun_utils::bind_local_stun_socket, time};
 
     mod stun_utils {
         //! Utils for testing that expose a simple stun server.
