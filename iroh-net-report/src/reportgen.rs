@@ -27,6 +27,7 @@ use std::{
 };
 
 use crate::task::{self, AbortOnDropHandle, JoinSet};
+use crate::time::{self, Instant};
 use anyhow::{anyhow, bail, Context as _, Result};
 use futures_lite::StreamExt as _;
 #[cfg(not(wasm_browser))]
@@ -43,10 +44,7 @@ use iroh_relay::{
 #[cfg(not(wasm_browser))]
 use netwatch::{interfaces, UdpSocket};
 use rand::seq::IteratorRandom;
-use tokio::{
-    sync::{mpsc, oneshot},
-    time::{self, Instant},
-};
+use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, debug_span, error, info_span, trace, warn, Instrument, Span};
 use url::Host;
 
@@ -262,9 +260,9 @@ impl Actor {
         let mut captive_task = self.prepare_captive_portal_task();
         let mut probes = self.spawn_probes_task().await?;
 
-        let total_timer = tokio::time::sleep(OVERALL_REPORT_TIMEOUT);
+        let total_timer = time::sleep(OVERALL_REPORT_TIMEOUT);
         tokio::pin!(total_timer);
-        let probe_timer = tokio::time::sleep(PROBES_TIMEOUT);
+        let probe_timer = time::sleep(PROBES_TIMEOUT);
         tokio::pin!(probe_timer);
 
         loop {

@@ -17,6 +17,7 @@ use std::{
 };
 
 use crate::task::AbortOnDropHandle;
+use crate::time::{Duration, Instant};
 use anyhow::{anyhow, Result};
 use bytes::Bytes;
 #[cfg(not(wasm_browser))]
@@ -27,10 +28,7 @@ use iroh_metrics::inc;
 use iroh_relay::{protos::stun, RelayMap};
 #[cfg(not(wasm_browser))]
 use netwatch::UdpSocket;
-use tokio::{
-    sync::{self, mpsc, oneshot},
-    time::{Duration, Instant},
-};
+use tokio::sync::{self, mpsc, oneshot};
 use tracing::{debug, error, info_span, trace, warn, Instrument};
 
 mod defaults;
@@ -42,6 +40,7 @@ mod ping;
 mod reportgen;
 
 pub mod task;
+pub mod time;
 
 pub use metrics::Metrics;
 use reportgen::ProbeProto;

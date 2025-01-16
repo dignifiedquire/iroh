@@ -2213,12 +2213,14 @@ dependencies = [
  "derive_more",
  "futures-buffered",
  "futures-lite",
+ "futures-util",
  "hickory-resolver",
  "iroh-base",
  "iroh-metrics",
  "iroh-quinn",
  "iroh-relay",
  "iroh-test 0.31.0",
+ "js-sys",
  "netwatch",
  "pin-project",
  "portmapper",
@@ -2226,6 +2228,7 @@ dependencies = [
  "rand",
  "reqwest",
  "rustls",
+ "send_wrapper",
  "surge-ping",
  "testresult",
  "thiserror 2.0.11",
@@ -2235,6 +2238,7 @@ dependencies = [
  "url",
  "wasm-bindgen",
  "wasm-bindgen-futures",
+ "web-time",
 ]
 
 [[package]]
@@ -2286,7 +2290,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -4035,6 +4039,12 @@ name = "semver"
 version = "1.0.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3cb6eb87a131f756572d7fb904f6e7b68633f09cca868c5df1c4b8d1a694bbba"
+
+[[package]]
+name = "send_wrapper"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cd0b0ec5f1c1ca621c432a25813d8d60c88abe6d3e08a3eb9cf37d97a0fe3d73"
 
 [[package]]
 name = "serde"
