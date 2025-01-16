@@ -512,9 +512,9 @@ impl Actor {
             self.outstanding_tasks.captive_task = true;
             MaybeFuture {
                 inner: Some(Box::pin(async move {
-                    tokio::time::sleep(CAPTIVE_PORTAL_DELAY).await;
+                    time::sleep(CAPTIVE_PORTAL_DELAY).await;
                     debug!("Captive portal check started after {CAPTIVE_PORTAL_DELAY:?}");
-                    let captive_portal_check = tokio::time::timeout(
+                    let captive_portal_check = time::timeout(
                         CAPTIVE_PORTAL_TIMEOUT,
                         check_captive_portal(
                             #[cfg(not(wasm_browser))]

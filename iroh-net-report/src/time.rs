@@ -4,14 +4,14 @@
 pub use tokio::time::*;
 
 #[cfg(wasm_browser)]
-pub use wasm::{sleep, Duration, Instant, Sleep};
+pub use wasm::{sleep, timeout, Duration, Elapsed, Instant, Sleep, Timeout};
 
 #[cfg(wasm_browser)]
 mod wasm {
     use futures_util::task::AtomicWaker;
     use send_wrapper::SendWrapper;
     use std::{
-        future::Future,
+        future::{Future, IntoFuture},
         pin::Pin,
         sync::{
             atomic::{AtomicBool, Ordering::Relaxed},
@@ -73,6 +73,14 @@ mod wasm {
     }
 
     impl Sleep {
+        pub fn deadline(&self) -> Instant {
+            self.deadline
+        }
+
+        pub fn is_elapsed(&self) -> bool {
+            self.triggered.has_triggered()
+        }
+
         pub fn reset(mut self: Pin<&mut Self>, deadline: Instant) {
             let duration = deadline
                 .checked_duration_since(Instant::now())
@@ -103,6 +111,59 @@ mod wasm {
         }
     }
 
+    #[derive(Debug)]
+    #[pin_project::pin_project]
+    pub struct Timeout<T> {
+        #[pin]
+        future: T,
+        #[pin]
+        sleep: Sleep,
+    }
+
+    pub struct Elapsed;
+
+    pub fn timeout<F>(duration: Duration, future: F) -> Timeout<F::IntoFuture>
+    where
+        F: IntoFuture,
+    {
+        Timeout {
+            future: future.into_future(),
+            sleep: sleep(duration),
+        }
+    }
+
+    impl<T: Future> Future for Timeout<T> {
+        type Output = Result<T::Output, Elapsed>;
+
+        fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+            let mut this = self.project();
+
+            if let Poll::Ready(result) = this.future.poll(cx) {
+                return Poll::Ready(Ok(result));
+            }
+
+            if let Poll::Ready(()) = this.sleep.poll(cx) {
+                return Poll::Ready(Err(Elapsed));
+            }
+
+            Poll::Pending
+        }
+    }
+
+    impl<T> Timeout<T> {
+        pub fn get_ref(&self) -> &T {
+            &self.future
+        }
+
+        pub fn get_mut(&mut self) -> &mut T {
+            &mut self.future
+        }
+
+        pub fn into_inner(self) -> T {
+            self.future
+        }
+    }
+
     // Private impls
 
     #[derive(Clone, Debug)]
@@ -120,6 +181,10 @@ mod wasm {
                 waker: AtomicWaker::new(),
                 set: AtomicBool::new(false),
             }))
+        }
+
+        fn has_triggered(&self) -> bool {
+            self.0.set.load(Relaxed)
         }
 
         fn signal(&self) {
