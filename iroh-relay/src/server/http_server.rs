@@ -10,7 +10,7 @@ use futures_util::SinkExt;
 use http::{
     header::{
         ACCESS_CONTROL_ALLOW_HEADERS, ACCESS_CONTROL_ALLOW_METHODS, ACCESS_CONTROL_ALLOW_ORIGIN,
-        CONNECTION, ORIGIN,
+        ACCESS_CONTROL_REQUEST_HEADERS, ACCESS_CONTROL_REQUEST_METHOD, CONNECTION, ORIGIN,
     },
     response::Builder as ResponseBuilder,
 };
@@ -442,13 +442,22 @@ impl Service<Request<Incoming>> for RelayService {
     type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
 
     fn call(&self, req: Request<Incoming>) -> Self::Future {
+        let origin = req.headers().get(ORIGIN).cloned();
         if req.method() == Method::OPTIONS {
             return Box::pin(async move {
-                Ok(Response::builder()
-                    .header(ACCESS_CONTROL_ALLOW_METHODS, "*")
-                    .header(ACCESS_CONTROL_ALLOW_HEADERS, "*")
-                    .header(ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-                    .body(body_empty())?)
+                let mut builder = Response::builder();
+
+                if let Some(method) = req.headers().get(ACCESS_CONTROL_REQUEST_METHOD) {
+                    builder = builder.header(ACCESS_CONTROL_ALLOW_METHODS, method);
+                }
+                if let Some(headers) = req.headers().get(ACCESS_CONTROL_REQUEST_HEADERS) {
+                    builder = builder.header(ACCESS_CONTROL_ALLOW_HEADERS, headers);
+                }
+                if let Some(origin) = origin {
+                    builder = builder.header(ACCESS_CONTROL_ALLOW_ORIGIN, origin);
+                }
+
+                Ok(builder.body(body_empty())?)
             });
         }
 
@@ -464,7 +473,6 @@ impl Service<Request<Incoming>> for RelayService {
 
         // Check all other possible endpoints.
         let uri = req.uri().clone();
-        let origin = req.headers().get(ORIGIN).cloned();
         if let Some(res) = self.0.handlers.get(&(req.method().clone(), uri.path())) {
             let f = res(req, self.0.default_response(origin));
             return Box::pin(async move { f });
