@@ -457,7 +457,7 @@ impl Service<Request<Incoming>> for RelayService {
                     builder = builder.header(ACCESS_CONTROL_ALLOW_ORIGIN, origin);
                 }
 
-                Ok(builder.body(body_empty())?)
+                Ok(builder.status(StatusCode::OK).body(body_empty())?)
             });
         }
 

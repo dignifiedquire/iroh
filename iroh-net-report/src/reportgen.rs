@@ -257,7 +257,10 @@ impl Actor {
         let mut port_mapping = self.prepare_portmapper_task();
         #[cfg(wasm_browser)]
         let mut port_mapping = futures_lite::future::pending();
+        #[cfg(not(wasm_browser))]
         let mut captive_task = self.prepare_captive_portal_task();
+        #[cfg(wasm_browser)]
+        let mut captive_task = futures_lite::future::pending();
         let mut probes = self.spawn_probes_task().await?;
 
         let total_timer = time::sleep(OVERALL_REPORT_TIMEOUT);
@@ -290,7 +293,7 @@ impl Actor {
 
                 // Drive the portmapper.
                 pm = &mut port_mapping, if self.outstanding_tasks.port_mapper => {
-                    // This future is completely disabled in wasm anyways.
+                    // This future is completely disabled in wasm.
                     #[cfg(not(wasm_browser))]
                     {
                         debug!(report=?pm, "tick: portmapper probe report");
@@ -318,10 +321,14 @@ impl Actor {
 
                 // Drive the captive task.
                 found = &mut captive_task, if self.outstanding_tasks.captive_task => {
-                    trace!("tick: captive portal task done");
-                    self.report.captive_portal = found;
-                    captive_task.inner = None;
-                    self.outstanding_tasks.captive_task = false;
+                    // This future is completely disabled in wasm.
+                    #[cfg(not(wasm_browser))]
+                    {
+                        trace!("tick: captive portal task done");
+                        self.report.captive_portal = found;
+                        captive_task.inner = None;
+                        self.outstanding_tasks.captive_task = false;
+                    }
                 }
 
                 // Handle actor messages.
@@ -492,6 +499,7 @@ impl Actor {
     }
 
     /// Creates the future which will perform the captive portal check.
+    #[cfg(not(wasm_browser))]
     fn prepare_captive_portal_task(
         &mut self,
     ) -> MaybeFuture<Pin<Box<impl Future<Output = Option<bool>>>>> {
@@ -506,7 +514,6 @@ impl Actor {
                 .as_ref()
                 .and_then(|l| l.preferred_relay.clone());
 
-            #[cfg(not(wasm_browser))]
             let dns_resolver = self.dns_resolver.clone();
             let dm = self.relay_map.clone();
             self.outstanding_tasks.captive_task = true;
@@ -516,20 +523,14 @@ impl Actor {
                     debug!("Captive portal check started after {CAPTIVE_PORTAL_DELAY:?}");
                     let captive_portal_check = time::timeout(
                         CAPTIVE_PORTAL_TIMEOUT,
-                        check_captive_portal(
-                            #[cfg(not(wasm_browser))]
-                            &dns_resolver,
-                            &dm,
-                            preferred_relay,
-                        )
-                        .instrument(debug_span!("captive-portal")),
+                        check_captive_portal(&dns_resolver, &dm, preferred_relay)
+                            .instrument(debug_span!("captive-portal")),
                     );
                     match captive_portal_check.await {
                         Ok(Ok(found)) => Some(found),
                         Ok(Err(err)) => {
                             let err: Result<reqwest::Error, _> = err.downcast();
                             match err {
-                                #[cfg(not(wasm_browser))]
                                 Ok(req_err) if req_err.is_connect() => {
                                     debug!("check_captive_portal failed: {req_err:#}");
                                 }
@@ -1011,8 +1012,9 @@ async fn run_quic_probe(
 /// return a "204 No Content" response and checking if that's what we get.
 ///
 /// The boolean return is whether we think we have a captive portal.
+#[cfg(not(wasm_browser))]
 async fn check_captive_portal(
-    #[cfg(not(wasm_browser))] dns_resolver: &DnsResolver,
+    dns_resolver: &DnsResolver,
     dm: &RelayMap,
     preferred_relay: Option<RelayUrl>,
 ) -> Result<bool> {
@@ -1043,14 +1045,8 @@ async fn check_captive_portal(
         }
     };
 
-    let mut builder = reqwest::ClientBuilder::new();
+    let mut builder = reqwest::ClientBuilder::new().redirect(reqwest::redirect::Policy::none());
 
-    #[cfg(not(wasm_browser))]
-    {
-        builder = builder.redirect(reqwest::redirect::Policy::none());
-    }
-
-    #[cfg(not(wasm_browser))]
     if let Some(Host::Domain(domain)) = url.host() {
         // Use our own resolver rather than getaddrinfo
         //
