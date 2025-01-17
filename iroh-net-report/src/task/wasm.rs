@@ -58,6 +58,16 @@ impl<T> JoinSet<T> {
     pub async fn join_next(&mut self) -> Option<Result<T, JoinError>> {
         futures_lite::future::poll_fn(|cx| {
             let ret = self.handles.poll_next(cx);
+            match &ret {
+                Poll::Pending => tracing::info!("polled JoinSet::join_next (pending)"),
+                Poll::Ready(None) => tracing::info!("polled JoinSet::join_next: None"),
+                Poll::Ready(Some(Ok(_))) => {
+                    tracing::info!("polled JoinSet::join_next: Some(Ok(_))")
+                }
+                Poll::Ready(Some(Err(e))) => {
+                    tracing::info!("polled JoinSet::join_next: Some(Err({e:?}))")
+                }
+            }
             // clean up handles that are either cancelled or have finished
             self.to_cancel.retain(JoinHandle::is_running);
             ret
@@ -87,7 +97,8 @@ pub struct JoinHandle<T> {
 struct Task<T> {
     cancelled: bool,
     completed: bool,
-    waker: Option<Waker>,
+    waker_handler: Option<Waker>,
+    waker_spawn_fn: Option<Waker>,
     result: Option<T>,
 }
 
@@ -106,16 +117,27 @@ impl<T> Task<T> {
     }
 
     fn wake(&mut self) {
-        if let Some(waker) = self.waker.take() {
+        if let Some(waker) = self.waker_handler.take() {
+            waker.wake();
+        }
+        if let Some(waker) = self.waker_spawn_fn.take() {
             waker.wake();
         }
     }
 
-    fn register(&mut self, cx: &mut Context<'_>) {
-        match self.waker {
+    fn register_handler(&mut self, cx: &mut Context<'_>) {
+        match self.waker_handler {
             // clone_from can be marginally faster in some cases
             Some(ref mut waker) => waker.clone_from(cx.waker()),
-            None => self.waker = Some(cx.waker().clone()),
+            None => self.waker_handler = Some(cx.waker().clone()),
+        }
+    }
+
+    fn register_spawn_fn(&mut self, cx: &mut Context<'_>) {
+        match self.waker_spawn_fn {
+            // clone_from can be marginally faster in some cases
+            Some(ref mut waker) => waker.clone_from(cx.waker()),
+            None => self.waker_spawn_fn = Some(cx.waker().clone()),
         }
     }
 }
@@ -126,7 +148,8 @@ impl<T> JoinHandle<T> {
             task: Rc::new(RefCell::new(Task {
                 cancelled: false,
                 completed: false,
-                waker: None,
+                waker_handler: None,
+                waker_spawn_fn: None,
                 result: None,
             })),
         }
@@ -134,14 +157,6 @@ impl<T> JoinHandle<T> {
 
     pub fn abort(&self) {
         self.task.borrow_mut().cancel();
-    }
-
-    fn register(&self, cx: &mut Context<'_>) {
-        self.task.borrow_mut().register(cx);
-    }
-
-    fn complete(&self, value: T) {
-        self.task.borrow_mut().complete(value);
     }
 
     fn is_running(&self) -> bool {
@@ -160,15 +175,20 @@ impl<T> Future for JoinHandle<T> {
     type Output = Result<T, JoinError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        if self.task.borrow().cancelled {
+        tracing::info!("JoinHandle::poll");
+        let mut task = self.task.borrow_mut();
+        if task.cancelled {
+            tracing::info!("JoinHandle::poll: cancelled");
             return Poll::Ready(Err(JoinError::Cancelled));
         }
 
-        if let Some(result) = self.task.borrow_mut().result.take() {
+        if let Some(result) = task.result.take() {
+            tracing::info!("JoinHandle::poll: Ready(Ok(_))");
             return Poll::Ready(Ok(result));
         }
 
-        self.register(cx);
+        tracing::info!("JoinHandle::poll: Pending");
+        task.register_handler(cx);
         Poll::Pending
     }
 }
@@ -185,18 +205,20 @@ impl<Fut: Future<Output = T>, T> Future for SpawnFuture<Fut, T> {
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
+        let mut task = this.handle.task.borrow_mut();
 
-        if this.handle.task.borrow().cancelled {
+        if task.cancelled {
             return Poll::Ready(());
         }
 
         match this.fut.poll(cx) {
             Poll::Ready(value) => {
-                this.handle.complete(value);
+                tracing::info!("waking up");
+                task.complete(value);
                 Poll::Ready(())
             }
             Poll::Pending => {
-                this.handle.register(cx);
+                task.register_spawn_fn(cx);
                 Poll::Pending
             }
         }

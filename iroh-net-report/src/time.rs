@@ -82,14 +82,15 @@ mod wasm {
         }
 
         pub fn reset(mut self: Pin<&mut Self>, deadline: Instant) {
-            let duration = deadline
-                .checked_duration_since(Instant::now())
-                .unwrap_or_default();
+            let duration = deadline.duration_since(Instant::now());
             let triggered = Flag::new();
 
             let closure = Closure::once({
                 let triggered = triggered.clone();
-                move || triggered.signal()
+                move || {
+                    tracing::trace!("timeout triggered");
+                    triggered.signal()
+                }
             });
 
             let timeout_id = SendWrapper::new(
@@ -231,6 +232,7 @@ mod wasm {
     }
 
     fn set_timeout(handler: js_sys::Function, timeout: i32) -> Result<JsValue, JsValue> {
+        tracing::trace!(?timeout, "setting timeout");
         let global_this = js_sys::global();
         let global_scope = global_this.unchecked_ref::<GlobalScope>();
         global_scope.set_timeout_with_callback_and_timeout_and_arguments_0(handler, timeout)

@@ -412,7 +412,7 @@ impl Actor {
                 delay=?timeout,
                 "Have enough probe reports, aborting further probes soon",
             );
-            tokio::spawn(
+            task::spawn(
                 async move {
                     time::sleep(timeout).await;
                     // Because we do this after a timeout it is entirely normal that the
@@ -844,7 +844,7 @@ async fn run_probe(
             .await
             {
                 Ok((latency, ip)) => {
-                    debug!(?latency, url = %node.url, "https latency measurement succeeded");
+                    debug!(?latency, "latency");
                     result.latency = Some(latency);
                     // We set these IPv4 and IPv6 but they're not really used
                     // and we don't necessarily set them both. If UDP is blocked
