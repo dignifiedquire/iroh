@@ -677,7 +677,6 @@ fn probe_handler(
 ) -> HyperResult<Response<BytesBody>> {
     response
         .status(StatusCode::OK)
-        .header("Access-Control-Allow-Origin", "*")
         .body(body_empty())
         .map_err(|err| Box::new(err) as HyperError)
 }
