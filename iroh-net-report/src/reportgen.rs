@@ -843,6 +843,7 @@ async fn run_probe(
             .await
             {
                 Ok((latency, ip)) => {
+                    debug!(?latency, url = %node.url, "https latency measurement succeeded");
                     result.latency = Some(latency);
                     // We set these IPv4 and IPv6 but they're not really used
                     // and we don't necessarily set them both. If UDP is blocked
